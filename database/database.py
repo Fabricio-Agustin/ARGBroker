@@ -1,13 +1,17 @@
+import os
 import mysql.connector
 from mysql.connector import Error
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def create_connection():
     try:
         return mysql.connector.connect(
-            host='localhost',
-            database='name_database',
-            user='root',
-            password='password'
+            host=os.getenv('DB_HOST'),
+            database=os.getenv('DB_NAME'),
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD')
         )
     
     except Error as e:

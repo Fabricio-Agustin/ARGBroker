@@ -1,1 +1,1 @@
-print("Hola mundo")
+# desde aoo.py se va a ejecutar todo el programa completo
