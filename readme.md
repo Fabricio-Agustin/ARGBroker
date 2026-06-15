@@ -20,4 +20,3 @@ El sistema permite interactuar mediante una interfaz de terminal para gestionar 
 * **Lenguaje:** Python
 * **Base de datos:** Mysql
 * **Herramientas:** Docker, Git, Github
-
