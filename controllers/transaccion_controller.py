@@ -1,60 +1,65 @@
-import random
-from models.transaccion_model import obtener_saldo_usuario, actualizar_saldo_usuario, registrar_transaccion_db
+"""
+Este módulo gestiona el flujo completo de una orden de compra o venta, 
+asegurando que el usuario cumpla con los requisitos financieros antes de confirmar cualquier movimiento 
+en la base de datos
 
-PRECIOS_ACCIONES = {
-    "AAPL": 175.0,
-    "TSLA": 180.0,
-    "MSFT": 420.0,
-    "GGAL": 35.0
-}
+Utiliza operaciones a nivel de bits para determinar el tipo de operación, 
+lo que permite un control de flujo rápido y eficiente:
 
-def obtener_precios_actualizados():
-    precios_simulados = {}
-    for activo, precio_base in PRECIOS_ACCIONES.items():
-        factor_mercado = random.uniform(-0.05, 0.07)
-        nuevo_precio = precio_base * (1 + factor_market)
-        precios_simulados[activo] = round(nuevo_precio, 2)
-    return precios_simulados
+OP_COMPRA (0b01): Identifica una orden de compra.
+OP_VENTA (0b00): Identifica una orden de venta.
+MASCARA_DIRECCION: Máscara para extraer el bit de dirección (compra/venta).
+MASCARA_VALIDACION: Máscara para verificar que no se envíen flags inválidos al sistema.
 
-def comprar_activo_logica(id_usuario, activo, cantidad):
-    """Procesa la orden de compra validando si le alcanza el dinero."""
-    precios = obtener_precios_actualizados()
+"""
+
+from models.transaccion_model import (
+    obtener_saldo_usuario, 
+    actualizar_saldo_usuario, 
+    registrar_transaccion_db,
+    obtener_portafolio_usuario,
+    actualizar_posicion_portafolio
+)
+
+OP_VENTA = 0b00
+OP_COMPRA = 0b01
+MASCARA_DIRECCION = 0b01   
+MASCARA_VALIDACION = 0b01  
+
+def procesar_orden(id_usuario, activo, cantidad, precio_mercado, flag_operacion: int):
+
+    if (flag_operacion & ~MASCARA_VALIDACION) != 0:
+        return "Error: Flag de operación inválido."
+
+    activo = activo.strip().upper()
+    es_compra = bool(flag_operacion & MASCARA_DIRECCION)
+    total_operacion = cantidad * precio_mercado
     
-    if activo not in precios:
-        return " El activo ingresado no cotiza en ARGBroker."
-        
-    precio_actual = precios[activo]
-    total_operacion = cantidad * precio_actual
     saldo_actual = obtener_saldo_usuario(id_usuario)
-    
-    if saldo_actual < total_operacion:
-        return f" Saldo insuficiente. Necesitás ${total_operacion:.2f} y disponés de ${saldo_actual:.2f}."
-        
-    # Restamos el dinero de la cuenta
-    nuevo_saldo = saldo_actual - total_operacion
-    
-    if actualizar_saldo_usuario(id_usuario, nuevo_saldo):
-        registrar_transaccion_db(id_usuario, "COMPRA", activo, cantidad, precio_actual, total_operacion)
-        return f" Compraste {cantidad} acciones de {activo} a ${precio_actual} c/u.\n💰 Tu nuevo saldo es: ${nuevo_saldo:.2f}."
-    else:
-        return " Error interno del Broker al procesar el pago."
 
-def vender_activo_logica(id_usuario, activo, cantidad):
-    """Procesa la orden de venta (aquí es donde el usuario ve si ganó o perdió)."""
-    precios = obtener_precios_actualizados()
-    
-    if activo not in precios:
-        return " El activo ingresado no cotiza en ARGBroker."
+    if es_compra:
+        if saldo_actual < total_operacion:
+            return f"Saldo insuficiente. Requerido: ${total_operacion:.2f}, Disponible: ${saldo_actual:.2f}."
         
-    precio_actual = precios[activo]
-    total_operacion = cantidad * precio_actual
-    saldo_actual = obtener_saldo_usuario(id_usuario)
+        nuevo_saldo = saldo_actual - total_operacion
+        tipo = "COMPRA"
     
-    # Sumamos las ganancias al saldo actual
-    nuevo_saldo = saldo_actual + total_operacion
-    
-    if actualizar_saldo_usuario(id_usuario, nuevo_saldo):
-        registrar_transaccion_db(id_usuario, "VENTA", activo, cantidad, precio_actual, total_operacion)
-        return f" Vendiste {cantidad} acciones de {activo} a ${precio_actual} c/u.\n💰 Recibiste: ${total_operacion:.2f}. Saldo total: ${nuevo_saldo:.2f}."
     else:
-        return " Error interno del Broker al acreditar la venta."
+        portafolio = obtener_portafolio_usuario(id_usuario)
+        posicion = next((p for p in portafolio if p['activo'] == activo), None)
+        
+        if not posicion or float(posicion['cantidad']) < cantidad:
+            return f"Error: No posees suficientes activos de {activo} para liquidar."
+            
+        nuevo_saldo = saldo_actual + total_operacion
+        tipo = "VENTA"
+
+    if actualizar_saldo_usuario(id_usuario, nuevo_saldo):
+        if actualizar_posicion_portafolio(id_usuario, activo, cantidad, precio_mercado, es_compra):
+            registrar_transaccion_db(id_usuario, tipo, activo, cantidad, precio_mercado, total_operacion)
+            return f"Operación exitosa: {tipo} de {cantidad} {activo} a ${precio_mercado:.2f}."
+        else:
+            actualizar_saldo_usuario(id_usuario, saldo_actual)
+            return "Error: No se pudo actualizar el portafolio."
+    
+    return "Error interno del sistema al procesar la transacción."

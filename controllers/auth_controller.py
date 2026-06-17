@@ -1,29 +1,39 @@
-from models.auth_model import buscar_usuario_por_id, registrar_usuario_db
+from rich.console import Console
+from rich.prompt import Prompt
+from views.menu_view import mostrar_menu_principal
+from views.auth_view import iniciar_sesion, registrar_cuenta
 
-def iniciar_sesion(id_usuario, password):
-    if not id_usuario or not password:
-        return {"exito": False, "mensaje": " Debes completar todos los campos."}
-        
-    usuario = buscar_usuario_por_id(id_usuario)
-    if not usuario:
-        return {"exito": False, "mensaje": " El ID de usuario no está registrado."}
-    
-    if usuario['password'] == password:
-        return {
-            "exito": True, 
-            "mensaje": f" ¡Conexión establecida! Bienvenido.", 
-            "usuario": usuario
-        }
-    else:
-        return {"exito": False, "mensaje": " Contraseña incorrecta."}
+class AuthManager:
+    def __init__(self, repo_auth, repo_trans):
+        self.repo_auth = repo_auth
+        self.repo_trans = repo_trans
+        self.console = Console()
+        self._running = True
 
-def registrar_cuenta(id_usuario, nombre, email, password):
-    if not id_usuario or not password or not nombre or not email:
-        return " Todos los campos son obligatorios para el registro."
-        
-    if buscar_usuario_por_id(id_usuario):
-        return " El ID de usuario ya se encuentra registrado."
-        
-    if registrar_usuario_db(id_usuario, nombre, email, password):
-        return " Cuenta creada con éxito. Ya puedes iniciar sesión con tus $10,000 iniciales."
-    return " Hubo un error interno al crear la cuenta en la base de datos."
+    def run(self):
+        while self._running:
+            self.console.print("\n[bold blue]─── ARGBroker ENTREGA FINAL ISPC ───[/bold blue]")
+            self.console.print("1. Iniciar Sesión\n2. Registrarse\n3. Salir")
+            op = Prompt.ask("Selecciona opción", choices=["1", "2", "3"])
+            if op == "1": self._handle_login()
+            elif op == "2": self._handle_register()
+            elif op == "3": self._running = False
+
+    def _handle_login(self):
+        user_id = Prompt.ask("Usuario")
+        password = Prompt.ask("Contraseña", password=True)
+        resultado = iniciar_sesion(self.repo_auth, user_id, password)
+        if resultado["exito"]:
+            self.console.print(f"[green]{resultado['mensaje']}[/green]")
+            mostrar_menu_principal(resultado["usuario"], self.repo_trans)
+        else:
+            self.console.print(f"[red]{resultado['mensaje']}[/red]")
+
+    def _handle_register(self):
+        self.console.print("\n[bold cyan]─── Registro de Nuevo Inversor ───[/bold cyan]")
+        user_id = Prompt.ask("ID")
+        nombre = Prompt.ask("Nombre")
+        email = Prompt.ask("Email")
+        password = Prompt.ask("Contraseña", password=True)
+        mensaje = registrar_cuenta(self.repo_auth, user_id, nombre, email, password)
+        self.console.print(f"[yellow]{mensaje}[/yellow]")

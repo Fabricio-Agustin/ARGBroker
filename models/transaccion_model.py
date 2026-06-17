@@ -1,106 +1,87 @@
-from decimal import Decimal
-from database.database import create_connection
+"""
+Este módulo gestiona la persistencia de datos financieros. Su responsabilidad es garantizar que el saldo, 
+el inventario de activos y el historial de compras/ventas siempre sean exactos y coherentes.
+"""
 
-def obtener_saldo_usuario(id_usuario):
-    conexion = create_connection()
-    if not conexion: return 0.0
-    cursor = conexion.cursor()
-    query = "SELECT saldo FROM usuarios WHERE id = %s"
-    try:
-        cursor.execute(query, (id_usuario,))
-        resultado = cursor.fetchone()
-        return float(resultado[0]) if resultado else 0.0
-    finally:
-        cursor.close()
-        conexion.close()
+class TransaccionRepository:
+    def __init__(self, db_manager):
+        self.db = db_manager
 
-def actualizar_saldo_usuario(id_usuario, nuevo_saldo):
-    conexion = create_connection()
-    if not conexion: return False
-    cursor = conexion.cursor()
-    query = "UPDATE usuarios SET saldo = %s WHERE id = %s"
-    try:
-        cursor.execute(query, (nuevo_saldo, id_usuario))
-        conexion.commit()
-        return True
-    except Exception:
-        return False
-    finally:
-        cursor.close()
-        conexion.close()
+    def obtener_saldo(self, id_usuario: int) -> float:
+        try:
+            with self.db.cursor(dictionary=True) as (cur, _):
+                cur.execute("SELECT saldo FROM usuarios WHERE id = %s", (id_usuario,))
+                res = cur.fetchone()
+                return float(res['saldo']) if res else 0.0
+        except Exception:
+            return 0.0
 
-def registrar_transaccion_db(id_usuario, tipo, activo, cantidad, precio, total):
-    conexion = create_connection()
-    if not conexion: return False
-    cursor = conexion.cursor()
-    query = "INSERT INTO transacciones (id_usuario, tipo, activo, cantidad, precio, total) VALUES (%s, %s, %s, %s, %s, %s)"
-    try:
-        cursor.execute(query, (id_usuario, tipo, activo, cantidad, precio, total))
-        conexion.commit()
-        return True
-    except Exception:
-        return False
-    finally:
-        cursor.close()
-        conexion.close()
+    def obtener_historial(self, id_usuario: int) -> list:
+        query = """SELECT tipo, activo, cantidad, precio, total, fecha 
+                   FROM transacciones 
+                   WHERE id_usuario = %s 
+                   ORDER BY fecha DESC"""
+        with self.db.cursor(dictionary=True) as (cur, _):
+            cur.execute(query, (id_usuario,))
+            return cur.fetchall()
 
-def obtener_portafolio_usuario(id_usuario):
-    conexion = create_connection()
-    if not conexion: return []
-    cursor = conexion.cursor(dictionary=True)
-    query = "SELECT activo, cantidad, precio_compra_promedio FROM portafolios WHERE id_usuario = %s AND cantidad > 0"
-    try:
-        cursor.execute(query, (id_usuario,))
-        return cursor.fetchall()
-    finally:
-        cursor.close()
-        conexion.close()
+    def obtener_cantidad_poseida(self, id_usuario: int, activo: str) -> float:
+        query = """SELECT SUM(CASE WHEN tipo = 'COMPRA' THEN cantidad ELSE -cantidad END) as total 
+                   FROM transacciones WHERE id_usuario = %s AND activo = %s"""
+        with self.db.cursor(dictionary=True) as (cur, _):
+            cur.execute(query, (id_usuario, activo))
+            res = cur.fetchone()
+            return float(res['total'] or 0)
 
-def actualizar_posicion_portafolio(id_usuario, activo, cantidad_operada, precio_operado, es_compra):
-    conexion = create_connection()
-    if not conexion: return False
-    cursor = conexion.cursor(dictionary=True)
-    
-    try:
-        query_buscar = "SELECT cantidad, precio_compra_promedio FROM portafolios WHERE id_usuario = %s AND activo = %s"
-        cursor.execute(query_buscar, (id_usuario, activo))
-        posicion = cursor.fetchone()
-        
-        cant_op_dec = Decimal(str(cantidad_operada))
-        prec_op_dec = Decimal(str(precio_operado))
-        
-        if es_compra:
-            if posicion:
-                cant_act_dec = Decimal(str(posicion['cantidad']))
-                prec_act_dec = Decimal(str(posicion['precio_compra_promedio']))
-                
-                nueva_cant = cant_act_dec + cant_op_dec
-                nuevo_ppc = ((cant_act_dec * prec_act_dec) + (cant_op_dec * prec_op_dec)) / nueva_cant
-                
-                query_update = "UPDATE portafolios SET cantidad = %s, precio_compra_promedio = %s WHERE id_usuario = %s AND activo = %s"
-                cursor.execute(query_update, (float(nueva_cant), float(nuevo_ppc), id_usuario, activo))
+    def obtener_portafolio_consolidado(self, id_usuario: int) -> list:
+        query = """SELECT activo, 
+                          SUM(CASE WHEN tipo = 'COMPRA' THEN cantidad ELSE -cantidad END) as total_cantidad,
+                          AVG(precio) as precio_promedio_compra
+                   FROM transacciones 
+                   WHERE id_usuario = %s 
+                   GROUP BY activo 
+                   HAVING total_cantidad > 0"""
+        with self.db.cursor(dictionary=True) as (cur, _):
+            cur.execute(query, (id_usuario,))
+            return cur.fetchall()
+
+    def buscar_cotizacion(self, ticker: str) -> float:
+        ticker = ticker.upper()
+        with self.db.cursor(dictionary=True) as (cur, conn):
+            cur.execute("SELECT precio_actual FROM activos WHERE ticker = %s", (ticker,))
+            res = cur.fetchone()
+            if res:
+                return float(res['precio_actual'])
             else:
-                query_insert = "INSERT INTO portafolios (id_usuario, activo, cantidad, precio_compra_promedio) VALUES (%s, %s, %s, %s)"
-                cursor.execute(query_insert, (id_usuario, activo, float(cant_op_dec), float(prec_op_dec)))
-        else:
-            if not posicion or Decimal(str(posicion['cantidad'])) < cant_op_dec:
-                return False 
+                cur.execute("INSERT INTO activos (ticker, precio_actual) VALUES (%s, 100.00)", (ticker,))
+                conn.commit()
+                return 100.00
+
+    def registrar_transaccion(self, id_usuario: int, tipo: str, activo: str, cantidad: float, precio: float, total: float) -> bool:
+        if cantidad <= 0: return False
+        
+        with self.db.cursor(dictionary=False) as (cur, conn):
+            try:
+                cur.execute("START TRANSACTION")
                 
-            cant_act_dec = Decimal(str(posicion['cantidad']))
-            nueva_cant = cant_act_dec - cant_op_dec
-            
-            if nueva_cant == 0:
-                query_delete = "DELETE FROM portafolios WHERE id_usuario = %s AND activo = %s"
-                cursor.execute(query_delete, (id_usuario, activo))
-            else:
-                query_update = "UPDATE portafolios SET cantidad = %s WHERE id_usuario = %s AND activo = %s"
-                cursor.execute(query_update, (float(nueva_cant), id_usuario, activo))
+                if tipo.upper() == 'COMPRA':
+                    if self.obtener_saldo(id_usuario) < total: 
+                        raise ValueError("Fondos insuficientes")
+                else: 
+                    if self.obtener_cantidad_poseida(id_usuario, activo) < cantidad:
+                        raise ValueError("No posees suficientes activos para vender")
+
+                cur.execute("""INSERT INTO transacciones (id_usuario, tipo, activo, cantidad, precio, total) 
+                                VALUES (%s, %s, %s, %s, %s, %s)""", 
+                            (id_usuario, tipo, activo, cantidad, precio, total))
                 
-        conexion.commit()
-        return True
-    except Exception as e:
-        print(f"[Error Portafolio]: {e}")
-        return False
-    finally:
-        cursor.close()
-        conexion.close()
+                signo = -1 if tipo.upper() == 'COMPRA' else 1
+                cur.execute("UPDATE usuarios SET saldo = saldo + (%s * %s) WHERE id = %s", 
+                            (signo, total, id_usuario))
+                
+                conn.commit()
+                return True
+            except Exception as e:
+                print(f"Error en transacción: {e}")
+                conn.rollback()
+                return False

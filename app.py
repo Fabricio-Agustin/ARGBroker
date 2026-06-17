@@ -1,10 +1,20 @@
-# Desde app.py se ejecuta absolutamente todo el programa completo
-from views.auth_view import mostrar_menu_auth
+from database.db_manager import DatabaseManager
+from models.auth_model import AuthRepository 
+from models.transaccion_model import TransaccionRepository
+from controllers.auth_controller import AuthManager
 
 def main():
-    # Arrancamos el flujo desde la pantalla de login/registro
-    mostrar_menu_auth()
+    db = DatabaseManager()
+    
+    repo_auth = AuthRepository(db)
+    repo_trans = TransaccionRepository(db)
+    
+    auth = AuthManager(repo_auth, repo_trans)
+    
+    try:
+        auth.run()
+    except Exception as e:
+        print(f"\n[Error crítico al ejecutar la aplicación]: {e}")
 
-# Punto de entrada del programa
 if __name__ == "__main__":
     main()

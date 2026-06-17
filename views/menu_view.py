@@ -1,146 +1,99 @@
+"""
+ARGBroker | ENTREGA FINAL PROGRAMACIÓN 1
+Interfaz principal, consolidación de activos y monitoreo de mercado.
+"""
+
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
-from rich.align import Align
-from controllers.rendimiento_service import BrokerMarketService
-from models.transaccion_model import obtener_saldo_usuario, obtener_portafolio_usuario
+from rich.table import Table
+from rich.prompt import Prompt
+from rich.live import Live
+import time
 
 console = Console()
-market_service = BrokerMarketService()
 
-def mostrar_encabezado_institucional():
-    """Genera el banner principal del sistema en consola."""
-    banner_text = (
-        "[bold white]ARGBROKER — COMPRA Y VENTA DE ACCIONES[/bold white]\n"
-        "[italic white]PROYECTO INTEGRADOR FINAL[/italic white]"
-    )
-    console.print(
-        Panel(
-            Align.center(banner_text),
-            border_style="white",
-            padding=(1, 2)
-        )
-    )
-
-def mostrar_mi_portafolio(id_usuario):
-    """Muestra las posiciones y los rendimientos calculados en tiempo real."""
-    portafolio = obtener_portafolio_usuario(id_usuario)
+def generar_tabla_portafolio(repo, id_usuario):
+    activos = repo.obtener_portafolio_consolidado(id_usuario)
+    tabla = Table(title="Tu Portafolio Consolidado", expand=True, header_style="bold cyan")
+    for col in ["Activo", "Unidades", "Precio Prom.", "Valor Actual"]:
+        tabla.add_column(col)
     
-    console.print("\n[bold white]─── PORTAFOLIO DE ACTIVOS GUARDADOS ───[/bold white]")
-    if not portafolio:
-        console.print(" No posees posiciones abiertas en tu portafolio.", style="white")
-        console.print("-" * 55, style="white")
-        return
+    if not activos:
+        tabla.add_row("N/A", "0.00", "$0.00", "$0.00")
+        return tabla
 
-    table = Table(show_header=True, header_style="white", box=None)
-    table.add_column("ACTIVO", justify="center", style="bold white")
-    table.add_column("CANTIDAD", justify="right", style="white")
-    table.add_column("PPC (Tu Compra)", justify="right", style="white")
-    table.add_column("VALOR HOY", justify="right", style="white")
-    table.add_column("REND. ACUM.", justify="right", style="white")
-    table.add_column("ESTADO", justify="center", style="white")
+    for item in activos:
+        ticker = item['activo']
+        unidades = item['total_cantidad']
+        promedio = item['precio_promedio_compra']
+        actual = repo.buscar_cotizacion(ticker)
+        tabla.add_row(ticker, f"{unidades:.2f}", f"${promedio:,.2f}", f"${actual:,.2f}")
+    return tabla
 
-    for p in portafolio:
-        activo = p['activo']
-        cant = float(p['cantidad'])
-        
-        metricas, exito = market_service.calcular_rendimiento_por_accion(id_usuario, activo)
-        precio_hoy = market_service.obtener_o_crear_precio(activo)
-        
-        rend_acum = metricas['rendimiento_acumulado']
-        estado = "GANANDO" if rend_acum >= 0 else "PERDIENDO"
-        
-        table.add_row(
-            activo, 
-            f"{cant:.2f}", 
-            f"${float(p['precio_compra_promedio']):.2f}", 
-            f"${precio_hoy:.2f}", 
-            f"{rend_acum:+.2f}%", 
-            estado
-        )
-        
-    console.print(table)
-    console.print("-" * 55, style="white")
+def generar_tabla_historial(repo, id_usuario):
+    historial = repo.obtener_historial(id_usuario)
+    tabla = Table(title="Monitoreo de Mercado en Tiempo Real (Ctrl+C para volver)", expand=True, header_style="bold magenta")
+    for col in ["Activo", "Precio Compra", "Precio Actual", "Estado"]:
+        tabla.add_column(col)
+    
+    if not historial:
+        return Panel("[yellow]Aún no hay transacciones registradas.[/yellow]")
 
-def mostrar_menu_principal(usuario):
+    for tx in historial[:5]:
+        activo = tx['activo']
+        precio_compra = float(tx['precio'])
+        precio_actual = repo.buscar_cotizacion(activo) 
+        
+        if precio_actual > precio_compra:
+            estado = f"[green]▲ +${(precio_actual - precio_compra):.2f}[/green]"
+        elif precio_actual < precio_compra:
+            estado = f"[red]▼ -${(precio_compra - precio_actual):.2f}[/red]"
+        else:
+            estado = "[white] = [/white]"
+        tabla.add_row(activo, f"${precio_compra:,.2f}", f"${precio_actual:,.2f}", estado)
+    return tabla
+
+def mostrar_menu_principal(usuario, repo):
     id_usuario = usuario['id']
-    nombre_usuario = usuario['nombre']
-    
     while True:
-        mostrar_encabezado_institucional()
+        console.clear()
+        console.print(Panel(
+            f"[bold yellow]ARGBroker v2.0[/bold yellow] | Usuario: [bold cyan]{usuario['nombre']}[/bold cyan] | "
+            f"Saldo Disponible: [green]${repo.obtener_saldo(id_usuario):,.2f}[/green]",
+            style="bold white"
+        ))
         
-        saldo = obtener_saldo_usuario(id_usuario)
-        info_perfil = f"Inversor: {nombre_usuario}  |  Billetera disponible: ${saldo:.2f}"
+        console.print(generar_tabla_portafolio(repo, id_usuario))
         
-        console.print(
-            Panel(
-                info_perfil, 
-                title="[bold white]PANEL DE TRADING[/bold white]", 
-                border_style="white", 
-                expand=False
-            )
-        )
+        console.print("\n[bold]ACCIONES:[/bold] [1] Comprar | [2] Vender | [3] Historial (Tiempo Real) | [4] Salir")
+        op = Prompt.ask("Selecciona una opción", choices=["1", "2", "3", "4"], default="4")
         
-        console.print(" 1. Buscar Accion y Ejecutar COMPRA", style="white")
-        console.print(" 2. Buscar Accion y Ejecutar VENTA", style="white")
-        console.print(" 3. Ver Mi Portafolio y Rendimientos Reales", style="white")
-        console.print(" 4. Cerrar Sesion", style="white")
-        console.print("-" * 55, style="white")
-        
-        opcion = input(" Selecciona una opcion (1-4): ").strip()
-        
-        if opcion == "1":
-            console.print("\n[bold white]─── MOTOR DE BUSQUEDA Y COMPRA ───[/bold white]")
-            activo = input(" Ingresa el Ticker del activo que buscas (Ej: NVDA, GGAL, AAPL, MSFT): ").strip().upper()
-            
-            precio_mercado = market_service.obtener_o_crear_precio(activo)
-            console.print(f" * Activo: {activo} | Estado: DISPONIBLE | Cotizacion actual: ${precio_mercado:.2f}")
-            
-            confirmar = input(f" ¿Deseas colocar una orden de compra sobre {activo}? (s/n): ").strip().lower()
-            if confirmar == 's':
-                try:
-                    cantidad = float(input(" Cantidad de acciones a comprar: "))
-                    if cantidad <= 0: 
-                        raise ValueError
-                    
-                    resultado = market_service.ejecutar_orden_bursatil(
-                        id_usuario, activo, cantidad, market_service.OP_COMPRA
-                    )
-                    console.print(f"\n {resultado}")
-                except ValueError:
-                    console.print("\n[bold white] Error: Cantidad invalida.[/bold white]")
-            else:
-                console.print("\n Orden de compra cancelada por el operador.", style="white")
-            console.print("-" * 55, style="white")
-            
-        elif opcion == "2":
-            console.print("\n[bold white]─── MOTOR DE BUSQUEDA Y VENTA ───[/bold white]")
-            mostrar_mi_portafolio(id_usuario)
-            activo = input(" Ingresa el Ticker del activo a liquidar: ").strip().upper()
-            
-            precio_mercado = market_service.obtener_o_crear_precio(activo)
-            console.print(f" * Activo: {activo} | Valor de mercado actual: ${precio_mercado:.2f}")
-            
-            confirmar = input(f" ¿Deseas confirmar la venta en el mercado de {activo}? (s/n): ").strip().lower()
-            if confirmar == 's':
-                try:
-                    cantidad = float(input(" Cantidad de acciones a vender: "))
-                    if cantidad <= 0: 
-                        raise ValueError
-                    
-                    resultado = market_service.ejecutar_orden_bursatil(
-                        id_usuario, activo, cantidad, market_service.OP_VENTA
-                    )
-                    console.print(f"\n {resultado}")
-                except ValueError:
-                    console.print("\n[bold white] Error: Cantidad invalida.[/bold white]")
-            else:
-                console.print("\n Orden de venta cancelada.", style="white")
-            console.print("-" * 55, style="white")
-            
-        elif opcion == "3":
-            mostrar_mi_portafolio(id_usuario)
-            
-        elif opcion == "4":
-            console.print("\n Sesion cerrada correctamente. Volviendo al menu de autenticacion...", style="white")
+        if op in ["1", "2"]:
+            tipo = 'COMPRA' if op == "1" else 'VENTA'
+            ticker = Prompt.ask("Ingrese Ticker").upper()
+            precio = repo.buscar_cotizacion(ticker)
+            console.print(f"[bold blue]Precio actual: ${precio:,.2f}[/bold blue]")
+            try:
+                cantidad = float(Prompt.ask("Cantidad"))
+                total = cantidad * precio
+                if Prompt.ask(f"¿Confirmar {tipo}?", choices=["s", "n"], default="s") == "s":
+                    if repo.registrar_transaccion(id_usuario, tipo, ticker, cantidad, precio, total):
+                        console.print("[green]✔ Operación exitosa.[/green]")
+                    else:
+                        console.print("[red]✘ Error: Fondos o activos insuficientes.[/red]")
+            except ValueError:
+                console.print("[red]! Cantidad inválida.[/red]")
+            time.sleep(1.5)
+
+        elif op == "3":
+            try:
+                with Live(generar_tabla_historial(repo, id_usuario), refresh_per_second=1) as live:
+                    while True:
+                        time.sleep(1)
+                        live.update(generar_tabla_historial(repo, id_usuario))
+            except KeyboardInterrupt:
+                continue
+                
+        elif op == "4":
+            console.print("[bold green]Sesión finalizada.[/bold green]")
             break
